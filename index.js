@@ -2,6 +2,7 @@ require("dotenv").config();
 const http = require("http");
 const https = require("https");
 const url = require("url");
+const crypto = require("crypto");
 const { v4: uuidv4 } = require("uuid");
 const Redis = require("ioredis");
 const { S3Client, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
@@ -71,6 +72,23 @@ const redis = new Redis(process.env.REDIS_URL);
 redis.on("error", (err) => console.error("Redis error:", err.message));
 
 // ─── AP pool helpers ──────────────────────────────────────────────
+
+// AWS access-point names must be 3–50 chars, lowercase [a-z0-9-], not
+// start/end with "-", and must not contain "-s3alias" / "--ol-s3" / ".mrap".
+// We sample 48 chars from a 32-letter base32 alphabet (a-z + 2-7) — 240 bits
+// of entropy, fully unguessable, and DNS-safe (50-char limit derives from the
+// 63-char DNS label cap once "-<accountId>" is appended).
+const AP_NAME_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+const AP_NAME_LEN = 48;
+
+function randomAPName() {
+  const bytes = crypto.randomBytes(AP_NAME_LEN);
+  let out = "";
+  for (let i = 0; i < AP_NAME_LEN; i++) {
+    out += AP_NAME_ALPHABET[bytes[i] & 31];
+  }
+  return out;
+}
 
 async function listAllAccessPoints() {
   const names = [];
@@ -235,7 +253,7 @@ async function runTopUp() {
         while (true) {
           const i = nextI++;
           if (i > BATCH_SIZE) return;
-          const name = `ap-${batchId}-${uuidv4().split("-")[0]}-${i}`;
+          const name = randomAPName();
           try {
             await s3Control.send(
               new CreateAccessPointCommand({
